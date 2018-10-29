@@ -3,53 +3,102 @@ package main
 import (
 	"flag"
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
-	"time"
+	"sync"
+
+	"github.com/pkg/errors"
 )
 
-type wg struct {
-	i int
-	c chan struct{}
-}
-
-//type wg chan struct{}
-
-func makewg(i int) (w wg) {
-	w.i = i
-	w.c = make(chan struct{}, i)
-	return
-}
-func (w *wg) take() { w.c <- struct{}{} }
-func (w *wg) put()  { <-w.c }
-func (w *wg) drain() {
-	for j := 0; j < w.i; j++ {
-		w.take()
+func run(c *exec.Cmd) {
+	fmt.Printf("running %q\n", c.Args)
+	o, err := c.CombinedOutput()
+	if err != nil {
+		fmt.Printf("!! %+v: %q\n%s\n", err, c.Args, string(o))
 	}
 }
 
-func run(c *exec.Cmd) {
-	fmt.Printf("running %q %q\n", c.Path, c.Args)
-	o, err := c.CombinedOutput()
-	fmt.Printf("%q %q -> %+v\n%s\n", c.Path, c.Args, err, string(o))
+func thread(wg *sync.WaitGroup, fnch chan string) {
+	runtime.LockOSThread()
+	goroutineBackgroundStart()
+	for fn := range fnch {
+		run(exec.Command("c:/utils/optipng.exe", "-o7", "-zm1-9", fn))
+		run(exec.Command("c:/utils/advpng.exe", "-z4", fn))
+		wg.Done()
+	}
+	runtime.Goexit() // kill self to clean up thread state
 }
 
-func optimize(w *wg, fn string) {
-	w.take()
-	defer w.put()
+func allsize(f []string) (r int64, err error) {
+	var s os.FileInfo
+	for k := range f {
+		s, err = os.Stat(f[k])
+		if err != nil {
+			err = errors.Wrapf(err, "unable to stat %q", f[k])
+			return
+		}
+		r += s.Size()
+	}
+	return
+}
 
-	run(exec.Command("c:/utils/optipng.exe", "-o7", "-zm1-9", fn))
-	run(exec.Command("c:/utils/advpng.exe", "-z4", fn))
+func must(m string, e error) {
+	if e != nil {
+		fmt.Fprintf(os.Stderr, "Failed to %s: %v\n", m, e)
+		panic(e)
+	}
+}
 
+func deglob() ([]string, error) {
+	r := make([]string, 0, flag.NArg())
+	for _, a := range flag.Args() {
+		if _, err := os.Stat(a); err != nil {
+			// argument isn't stat-able, so might be a glob?
+			m, err := filepath.Glob(a)
+			if err != nil {
+				return nil, errors.Wrapf(err, "can't find or expand %q", a)
+			}
+			r = append(r, m...)
+		} else {
+			r = append(r, a)
+		}
+	}
+	return r, nil
 }
 
 func main() {
 	procs := flag.Int("c", runtime.NumCPU(), "maximum number of concurrent processes")
 	flag.Parse()
-	w := makewg(*procs)
-	for _, v := range flag.Args() {
-		go optimize(&w, v)
+	if flag.NArg() == 0 {
+		fmt.Println("Supply list of files for processing")
+		return
 	}
-	time.Sleep(1 * time.Second)
-	w.drain()
+
+	fns, err := deglob()
+	must("find specified files", err)
+
+	startSize, err := allsize(fns)
+	must("calculate starting file sizes", err)
+	fmt.Printf("Starting size: %d bytes\n", startSize)
+
+	processBackgroundStart()
+	var wg sync.WaitGroup
+	wg.Add(len(fns))
+	fnch := make(chan string)
+	for j := 0; j < *procs; j++ {
+		go thread(&wg, fnch)
+	}
+	for k := range fns {
+		fnch <- fns[k]
+	}
+	wg.Wait()
+	close(fnch)
+	processBackgroundStop() // currently a no-op, but maybe later?
+
+	endSize, err := allsize(fns)
+	must("calculate ending file sizes", err)
+	fmt.Printf("Ending size: %d bytes (%.2f%% of %d)\n", endSize, (100*float32(endSize))/float32(startSize), startSize)
+
 }
