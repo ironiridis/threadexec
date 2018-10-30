@@ -54,16 +54,14 @@ func must(m string, e error) {
 func deglob() ([]string, error) {
 	r := make([]string, 0, flag.NArg())
 	for _, a := range flag.Args() {
-		if _, err := os.Stat(a); err != nil {
-			// argument isn't stat-able, so might be a glob?
-			m, err := filepath.Glob(a)
-			if err != nil {
-				return nil, errors.Wrapf(err, "can't find or expand %q", a)
-			}
-			r = append(r, m...)
-		} else {
-			r = append(r, a)
+		m, err := filepath.Glob(a)
+		if err != nil {
+			return nil, errors.Wrapf(err, "possibly invalid glob pattern %q", a)
 		}
+		if len(m) == 0 {
+			return nil, fmt.Errorf("no files found matching %q", a)
+		}
+		r = append(r, m...)
 	}
 	return r, nil
 }
