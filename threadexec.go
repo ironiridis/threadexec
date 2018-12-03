@@ -68,6 +68,9 @@ func deglob() ([]string, error) {
 
 func main() {
 	procs := flag.Int("c", runtime.NumCPU(), "maximum number of concurrent processes")
+	fsdelta := flag.Bool("s", true, "calculate file sizes before and after operation")
+	resched := flag.Bool("i", true, "run process at idle priority")
+
 	flag.Parse()
 	if flag.NArg() == 0 {
 		fmt.Println("Supply list of files for processing")
@@ -77,11 +80,17 @@ func main() {
 	fns, err := deglob()
 	must("find specified files", err)
 
-	startSize, err := allsize(fns)
-	must("calculate starting file sizes", err)
-	fmt.Printf("Starting size: %d bytes\n", startSize)
+	var startSize int64
+	if *fsdelta {
+		startSize, err = allsize(fns)
+		must("calculate starting file sizes", err)
+		fmt.Printf("Starting size: %d bytes\n", startSize)
+	}
 
-	processBackgroundStart()
+	if *resched {
+		processBackgroundStart()
+	}
+
 	var wg sync.WaitGroup
 	wg.Add(len(fns))
 	fnch := make(chan string)
@@ -93,10 +102,11 @@ func main() {
 	}
 	wg.Wait()
 	close(fnch)
-	processBackgroundStop() // currently a no-op, but maybe later?
 
-	endSize, err := allsize(fns)
-	must("calculate ending file sizes", err)
-	fmt.Printf("Ending size: %d bytes (%.2f%% of %d)\n", endSize, (100*float32(endSize))/float32(startSize), startSize)
+	if *fsdelta {
+		endSize, err := allsize(fns)
+		must("calculate ending file sizes", err)
+		fmt.Printf("Ending size: %d bytes (%.2f%% of %d)\n", endSize, (100*float32(endSize))/float32(startSize), startSize)
+	}
 
 }
