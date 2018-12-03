@@ -20,12 +20,20 @@ func run(c *exec.Cmd) {
 	}
 }
 
-func thread(wg *sync.WaitGroup, fnch chan string) {
+func profilePNG(fn string) {
+	run(exec.Command("c:/utils/optipng.exe", "-o7", "-zm1-9", fn))
+	run(exec.Command("c:/utils/advpng.exe", "-z4", fn))
+}
+
+func profileZIP(fn string) {
+	run(exec.Command("c:/utils/advzip.exe", "-z4k", "-i40", fn))
+}
+
+func thread(wg *sync.WaitGroup, fnch chan string, fnp func(string)) {
 	runtime.LockOSThread()
 	goroutineBackgroundStart()
 	for fn := range fnch {
-		run(exec.Command("c:/utils/optipng.exe", "-o7", "-zm1-9", fn))
-		run(exec.Command("c:/utils/advpng.exe", "-z4", fn))
+		fnp(fn)
 		wg.Done()
 	}
 	runtime.Goexit() // kill self to clean up thread state
@@ -70,6 +78,7 @@ func main() {
 	procs := flag.Int("c", runtime.NumCPU(), "maximum number of concurrent processes")
 	fsdelta := flag.Bool("s", true, "calculate file sizes before and after operation")
 	resched := flag.Bool("i", true, "run process at idle priority")
+	profile := flag.String("p", "png", "profile for thread processing") // this will be better some day
 
 	flag.Parse()
 	if flag.NArg() == 0 {
@@ -95,7 +104,12 @@ func main() {
 	wg.Add(len(fns))
 	fnch := make(chan string)
 	for j := 0; j < *procs; j++ {
-		go thread(&wg, fnch)
+		switch *profile {
+		case "png":
+			go thread(&wg, fnch, profilePNG)
+		case "zip":
+			go thread(&wg, fnch, profileZIP)
+		}
 	}
 	for k := range fns {
 		fnch <- fns[k]
